@@ -1,7 +1,10 @@
+# File: .github/workflows/build-logos-zip.yml
 name: Build brand-logos.zip
+
 on:
   workflow_dispatch:
   push:
+    branches: [ main, master ]
     paths:
       - assets/brands.html
       - .github/workflows/build-logos-zip.yml
@@ -9,8 +12,26 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Preflight diagnostics
+        run: |
+          echo "Branch: $GITHUB_REF_NAME"
+          echo "Repo tree:"
+          ls -la
+          echo "assets dir:"
+          ls -la assets || true
+          echo "brands.html size (bytes):"
+          test -f assets/brands.html && wc -c assets/brands.html || echo "assets/brands.html MISSING"
+
+      - name: Ensure assets/brands.html exists
+        run: |
+          test -f assets/brands.html || { 
+            echo "::error::Missing assets/brands.html. Create it on the default branch and paste your snippet."; 
+            exit 1; 
+          }
 
       - name: Download logos & zip
         run: |
@@ -38,106 +59,75 @@ jobs:
                   self.current_img = None
                   self.current_brand = []
                   self.pairs = []
-
               def handle_starttag(self, tag, attrs):
                   if tag == "a":
-                      self.in_a = True
-                      self.current_img = None
-                      self.current_brand = []
+                      self.in_a = True; self.current_img = None; self.current_brand = []
                   elif self.in_a and tag == "img":
                       src = dict(attrs).get("src")
-                      if src and not self.current_img:
-                          self.current_img = src
+                      if src and not self.current_img: self.current_img = src
                   elif self.in_a and tag == "span":
                       self.in_span = True
-
               def handle_endtag(self, tag):
                   if tag == "span":
                       self.in_span = False
                   elif tag == "a":
                       brand = "".join(self.current_brand).strip()
-                      if self.current_img and brand:
-                          self.pairs.append((brand, self.current_img))
-                      self.in_a = False
-                      self.in_span = False
-                      self.current_img = None
-                      self.current_brand = []
-
+                      if self.current_img and brand: self.pairs.append((brand, self.current_img))
+                      self.in_a = False; self.in_span = False; self.current_img = None; self.current_brand = []
               def handle_data(self, data):
-                  if self.in_a and self.in_span:
-                      self.current_brand.append(data)
+                  if self.in_a and self.in_span: self.current_brand.append(data)
 
           def ext_from_url(u):
-              import os
-              p = os.path.basename(urlparse(u).path)
-              _, ext = os.path.splitext(p)
+              p = os.path.basename(urlparse(u).path); _, ext = os.path.splitext(p)
               return ext.lower() if ext.lower() in (".jpg",".jpeg",".png",".gif",".webp",".svg") else ".jpg"
 
           def slug(s):
               s = unicodedata.normalize("NFKD", s).encode("ascii","ignore").decode("ascii")
-              s = s.lower().replace("&", " and ")
-              s = re.sub(r"[^a-z0-9]+","-", s)
-              s = re.sub(r"-{2,}","-", s).strip("-")
-              return s or "logo"
+              s = s.lower().replace("&", " and "); s = re.sub(r"[^a-z0-9]+","-", s)
+              s = re.sub(r"-{2,}","-", s).strip("-"); return s or "logo"
 
           def download(url, out_path):
               req = Request(url, headers={"User-Agent": USER_AGENT})
               for attempt in range(1, RETRY+2):
                   try:
-                      with urlopen(req, timeout=TIMEOUT) as r, open(out_path, "wb") as f:
-                          f.write(r.read())
+                      with urlopen(req, timeout=TIMEOUT) as r, open(out_path, "wb") as f: f.write(r.read())
                       return True, "ok"
                   except (HTTPError, URLError) as e:
-                      if attempt <= RETRY:
-                          time.sleep(0.6 * attempt)
-                          continue
+                      if attempt <= RETRY: time.sleep(0.7 * attempt); continue
                       return False, f"{type(e).__name__}: {getattr(e,'code',getattr(e,'reason',str(e)))}"
                   except Exception as e:
-                      if attempt <= RETRY:
-                          time.sleep(0.6 * attempt)
-                          continue
+                      if attempt <= RETRY: time.sleep(0.7 * attempt); continue
                       return False, f"error: {e}"
 
           if not os.path.exists(HTML_PATH):
-              print(f"Missing {HTML_PATH}", file=sys.stderr)
-              sys.exit(1)
+              print("assets/brands.html missing", file=sys.stderr); sys.exit(1)
 
-          with open(HTML_PATH, "r", encoding="utf-8") as f:
-              html = f.read()
-
-          parser = BrandParser()
-          parser.feed(html)
-          pairs = parser.pairs
+          with open(HTML_PATH, "r", encoding="utf-8") as f: html = f.read()
+          parser = BrandParser(); parser.feed(html); pairs = parser.pairs
           if not pairs:
-              print("No (brand, img) pairs found.", file=sys.stderr)
-              sys.exit(1)
+              print("No (brand,img) pairs parsed. Check snippet.", file=sys.stderr); sys.exit(1)
 
           os.makedirs(OUT_DIR, exist_ok=True)
           manifest = os.path.join(OUT_DIR, "_manifest.csv")
           with open(manifest, "w", newline="", encoding="utf-8") as csvfile:
-              w = csv.writer(csvfile)
-              w.writerow(["brand","filename","url"])
+              w = csv.writer(csvfile); w.writerow(["brand","filename","url"])
               for brand, url in pairs:
-                  name = slug(brand)
-                  ext = ext_from_url(url)
-                  out = os.path.join(OUT_DIR, name + ext)
+                  name = slug(brand); ext = ext_from_url(url); out = os.path.join(OUT_DIR, name + ext)
                   ok, msg = download(url, out)
+                  fn = os.path.basename(out if ok else out + ".FAILED.txt")
                   if not ok:
                       with open(out + ".FAILED.txt", "w", encoding="utf-8") as ff:
                           ff.write(f"Failed: {url}\n{msg}\n")
-                      fn = os.path.basename(out + ".FAILED.txt")
                       print(f"[!!] {brand} -> {fn} ({msg})")
                   else:
-                      fn = os.path.basename(out)
                       print(f"[OK] {brand} -> {fn}")
                   w.writerow([brand, fn, url])
 
           with zipfile.ZipFile(ZIP_PATH, "w", compression=zipfile.ZIP_DEFLATED) as z:
               for root, _, files in os.walk(OUT_DIR):
-                  for fn in files:
+                  for fn in files: 
                       p = os.path.join(root, fn)
                       z.write(p, arcname=os.path.relpath(p, start=os.path.dirname(OUT_DIR)))
-
           print(f"Created {ZIP_PATH}")
           PY
 
